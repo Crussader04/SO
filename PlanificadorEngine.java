@@ -13,7 +13,10 @@ public class PlanificadorEngine {
         
         List<Proceso> pendientes = new ArrayList<>();
         for(Proceso p : inputProcesos) {
-            pendientes.add(new Proceso(p.id, p.burstTotal, p.prioridad, p.llegada, p.inicioIO, p.duracionIO));
+            // Clonamos pasando las listas (IMPORTANTE: crear nuevas listas para no modificar original)
+            pendientes.add(new Proceso(p.id, p.burstTotal, p.prioridad, p.llegada, 
+                                       new ArrayList<>(p.listaIniciosIO), 
+                                       new ArrayList<>(p.listaDuracionesIO)));
         }
 
         List<Proceso> colaListos = new ArrayList<>();
@@ -22,9 +25,9 @@ public class PlanificadorEngine {
 
         while (terminados.size() < inputProcesos.size() && reloj < 10000) {
             
-            // Listas auxiliares para eventos de ESTE segundo
+            // Listas auxiliares para eventos de ESTE segundo (para graficar)
             List<Proceso> ingresosCPL = new ArrayList<>();
-            List<Proceso> ingresosIO = new ArrayList<>(); // <-- NUEVA LISTA
+            List<Proceso> ingresosIO = new ArrayList<>(); 
 
             // 1. LLEGADAS
             Iterator<Proceso> it = pendientes.iterator();
@@ -32,6 +35,7 @@ public class PlanificadorEngine {
                 Proceso p = it.next();
                 if (p.llegada == reloj) {
                     colaListos.add(p);
+                    p.envejeciendo = false;
                     ingresosCPL.add(p);
                     it.remove();
                 }
@@ -42,7 +46,8 @@ public class PlanificadorEngine {
                 List<Proceso> vuelven = new ArrayList<>();
                 for (Proceso p : bloqueados) {
                     p.tiempoEnIO++;
-                    if (p.tiempoEnIO >= p.duracionIO) {
+                    // Usamos duracionIOActual, que se cargó al irse a bloqueo
+                    if (p.tiempoEnIO >= p.duracionIOActual) {
                         vuelven.add(p);
                     }
                 }
@@ -50,19 +55,40 @@ public class PlanificadorEngine {
                     bloqueados.remove(p);
                     p.enIO = false;
                     p.tiempoEnIO = 0;
-                    p.tiempoEsperandoEnCola = 0; 
+                    p.tiempoEsperandoEnCola = 0;
+                    p.envejeciendo = false;
+                    
+                    // IMPORTANTE: Preparamos el siguiente índice para la próxima E/S
+                    p.indiceIO++; 
+                    
                     colaListos.add(p);
                     ingresosCPL.add(p); // Vuelve a CPL
                 }
             }
 
-            // 3. CHECK E/S EN CPU (Aquí detectamos el ingreso a IO)
-            if (cpu != null && !cpu.enIO && cpu.duracionIO > 0) {
-                if (cpu.tiempoEjecutado == cpu.inicioIO) {
-                    cpu.enIO = true;
-                    bloqueados.add(cpu);
-                    ingresosIO.add(cpu); // <-- REGISTRAMOS EL EVENTO
-                    cpu = null;
+            // 3. CHECK E/S EN CPU
+            // Verificamos si al proceso actual le toca alguna E/S de su lista
+            if (cpu != null && !cpu.enIO) {
+                // ¿Le quedan E/S pendientes?
+                if (cpu.indiceIO < cpu.listaIniciosIO.size()) {
+                    int momentoIO = cpu.listaIniciosIO.get(cpu.indiceIO);
+                    
+                    // Si el tiempo ejecutado coincide con el hito de E/S
+                    if (cpu.tiempoEjecutado == momentoIO) {
+                        cpu.enIO = true;
+                        
+                        // Cargamos la duración correspondiente a ESTE índice
+                        if (cpu.indiceIO < cpu.listaDuracionesIO.size()) {
+                            cpu.duracionIOActual = cpu.listaDuracionesIO.get(cpu.indiceIO);
+                        } else {
+                            // Seguridad por si faltan datos
+                            cpu.duracionIOActual = 1; 
+                        }
+
+                        bloqueados.add(cpu);
+                        ingresosIO.add(cpu);
+                        cpu = null;
+                    }
                 }
             }
 
@@ -73,30 +99,31 @@ public class PlanificadorEngine {
             if (!colaListos.isEmpty()) {
                 if (cpu == null) {
                     cpu = colaListos.remove(0);
+                    cpu.envejeciendo = false;
                 } else {
                     if (colaListos.get(0).prioridad < cpu.prioridad) {
                         colaListos.add(cpu);
-                        // Opcional: Si quieres ver el reingreso por expropiación:
-                        // ingresosCPL.add(cpu); 
                         cpu = colaListos.remove(0);
+                        cpu.envejeciendo = false;
                     }
                 }
             }
 
-            // 5. AGING
+            // 5. AGING (Envejecimiento)
             for (Proceso p : colaListos) {
-                if (p.prioridad > umbralPrioridad) {
+                if (p.prioridad > umbralPrioridad || p.envejeciendo) {
                     p.tiempoEsperandoEnCola++;
                     if (p.tiempoEsperandoEnCola >= umbralTiempo) {
-                        p.prioridad--;
+                        p.prioridad = Math.max(0, p.prioridad - 1); 
                         p.tiempoEsperandoEnCola = 0;
+                        p.envejeciendo = true;
                     }
                 } else {
-                    p.tiempoEsperandoEnCola = 0; 
+                    p.tiempoEsperandoEnCola = 0;
                 }
             }
 
-            // REGISTRO (Pasamos el reloj y la nueva lista ingresosIO)
+            // REGISTRO 
             registrarGantt(reloj, cpu, ingresosIO, ingresosCPL);
 
             // EJECUCIÓN
@@ -108,7 +135,21 @@ public class PlanificadorEngine {
                 if (cpu.burstRestante == 0) {
                     cpu.tiempoFin = reloj + 1;
                     cpu.tiempoRetorno = cpu.tiempoFin - cpu.llegada;
-                    cpu.tiempoEspera = cpu.tiempoRetorno - cpu.burstTotal - cpu.duracionIO;
+                    cpu.tiempoEspera = cpu.tiempoRetorno - cpu.burstTotal; 
+                    
+                    // Restamos TODAS las E/S que haya hecho para tener la espera real en cola
+                    int totalIO = 0;
+                    // Sumamos solo las que completó (o sea, las anteriores a indiceIO)
+                    // Como el índice avanza al volver, sumamos hasta indiceIO-1.
+                    // O más fácil: TiempoEspera = Retorno - RáfagaTotal - (Suma de Duraciones EJECUTADAS)
+                    // Pero tu fórmula simple (Retorno - BurstTotal) incluye el tiempo de IO como "no-espera" 
+                    // si consideramos que espera es solo en cola de listos.
+                    // Para ajustarlo exacto, restamos el tiempo total que pasó en IO:
+                    for(int k=0; k < cpu.indiceIO && k < cpu.listaDuracionesIO.size(); k++){
+                         totalIO += cpu.listaDuracionesIO.get(k);
+                    }
+                    cpu.tiempoEspera -= totalIO;
+
                     terminados.add(cpu);
                     cpu = null;
                 }
@@ -117,19 +158,18 @@ public class PlanificadorEngine {
         }
     }
 
-    // Método actualizado para recibir reloj e ingresosIO
     private void registrarGantt(int reloj, Proceso cpu, List<Proceso> ingresosIO, List<Proceso> ingresosCPL) {
-        // 1. CPU (Formato estándar 3 partes)
+        // 1. CPU
         if (cpu != null) ganttCPU.add("P" + cpu.id + "|" + cpu.prioridad + "|" + cpu.burstRestante);
         else ganttCPU.add("-");
         
-        // 2. CE/S (NUEVO FORMATO 4 partes: ID|Prio|Rafaga|TiempoSalida)
+        // 2. CE/S
         if (ingresosIO.isEmpty()) ganttIO.add("-");
         else {
             StringBuilder sb = new StringBuilder();
             for(Proceso p : ingresosIO) {
-                // Calculamos cuándo saldrá: tiempo actual + duración
-                int tiempoSalida = reloj + p.duracionIO;
+                // Usamos duracionIOActual para calcular salida visual
+                int tiempoSalida = reloj + p.duracionIOActual;
                 sb.append("P").append(p.id).append("|")
                   .append(p.prioridad).append("|")
                   .append(p.burstRestante).append("|")
@@ -138,7 +178,7 @@ public class PlanificadorEngine {
             ganttIO.add(sb.toString().trim());
         }
 
-        // 3. CPL (Formato estándar 3 partes)
+        // 3. CPL
         if (ingresosCPL.isEmpty()) ganttListos.add("-");
         else {
             StringBuilder sb = new StringBuilder();

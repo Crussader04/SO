@@ -2,6 +2,7 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.ArrayList;
+import java.util.List;
 
 public class VentanaPrincipal extends JFrame {
     private DefaultTableModel modeloTabla;
@@ -15,7 +16,7 @@ public class VentanaPrincipal extends JFrame {
     private PlanificadorEngine engine = new PlanificadorEngine();
 
     public VentanaPrincipal() {
-        setTitle("Planificador Avanzado - Regla: Si P > X, mejorar cada Y ms");
+        setTitle("Planificador de prioridades con envejecimiento");
         setSize(1100, 700);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLayout(new BorderLayout(5, 5));
@@ -24,20 +25,21 @@ public class VentanaPrincipal extends JFrame {
         JPanel panelNorte = new JPanel(new FlowLayout(FlowLayout.LEFT));
         
         // Configuración de la REGLA
-        panelNorte.add(new JLabel("Si Prioridad > "));
+        panelNorte.add(new JLabel("Si Prioridad >= "));
         txtUmbralPrio = new JTextField("7", 3); // Valor por defecto del ejemplo
         panelNorte.add(txtUmbralPrio);
         
-        panelNorte.add(new JLabel(" entonces mejorar cada (ms):"));
+        panelNorte.add(new JLabel(" entonces mejorar la prioridad cada:"));
         txtUmbralTiempo = new JTextField("5", 3); // Valor por defecto del ejemplo
         panelNorte.add(txtUmbralTiempo);
+        panelNorte.add(new JLabel("ms"));
 
         // Botones
         JButton btnAdd = new JButton("+");
         JButton btnDel = new JButton("-");
         JButton btnEjecutar = new JButton("Ejecutar Simulación");
         btnEjecutar.setBackground(new Color(255, 140, 0));
-        btnEjecutar.setForeground(Color.WHITE);
+        btnEjecutar.setForeground(Color.BLACK);
 
         panelNorte.add(Box.createHorizontalStrut(20)); // Espacio
         panelNorte.add(btnAdd); panelNorte.add(btnDel); panelNorte.add(btnEjecutar);
@@ -45,7 +47,14 @@ public class VentanaPrincipal extends JFrame {
 
         // --- 2. TABLA ---
         String[] col = {"Proceso", "T.Llegada", "Prioridad", "O E/S", "Duración", "Ráfaga CPU", "T.Esp", "T.Ret"};
-        modeloTabla = new DefaultTableModel(col, 0);
+            // Hacemos un modelo donde las dos últimas columnas (6 y 7) NO sean editables
+            modeloTabla = new DefaultTableModel(col, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    // Columnas 0..5 editables (entrada del usuario). 6 (T.Esp) y 7 (T.Ret) son calculadas.
+                    return column >= 0 && column <= 5;
+                }
+            };
         tabla = new JTable(modeloTabla);
         add(new JScrollPane(tabla), BorderLayout.CENTER);
 
@@ -63,7 +72,7 @@ public class VentanaPrincipal extends JFrame {
         panelTotales = new PanelControl();
         JButton btnSalir = new JButton("Salir");
         btnSalir.setBackground(Color.RED);
-        btnSalir.setForeground(Color.WHITE);
+        btnSalir.setForeground(Color.BLACK);
         btnSalir.addActionListener(e -> System.exit(0));
         
         JPanel panelSur = new JPanel(new BorderLayout());
@@ -81,12 +90,12 @@ public class VentanaPrincipal extends JFrame {
             if(tabla.getSelectedRow() != -1) modeloTabla.removeRow(tabla.getSelectedRow());
         });
 
+        // --- LÓGICA MODIFICADA PARA LEER GUIONES (2-4) ---
         btnEjecutar.addActionListener(e -> {
             try {
                 if (tabla.isEditing()) tabla.getCellEditor().stopCellEditing();
 
                 java.util.List<Proceso> listaInput = new ArrayList<>();
-                // Leemos los DOS umbrales
                 int umbralT = Integer.parseInt(txtUmbralTiempo.getText());
                 int umbralP = Integer.parseInt(txtUmbralPrio.getText());
 
@@ -95,14 +104,18 @@ public class VentanaPrincipal extends JFrame {
                     int id = Integer.parseInt(nombre.replace("P", "").trim());
                     int llegada = Integer.parseInt(modeloTabla.getValueAt(i, 1).toString());
                     int prio = Integer.parseInt(modeloTabla.getValueAt(i, 2).toString());
-                    int inicioIO = Integer.parseInt(modeloTabla.getValueAt(i, 3).toString());
-                    int duracionIO = Integer.parseInt(modeloTabla.getValueAt(i, 4).toString());
                     int rafaga = Integer.parseInt(modeloTabla.getValueAt(i, 5).toString());
+                    
+                    // Parseamos los guiones
+                    String strInicioIO = modeloTabla.getValueAt(i, 3).toString();
+                    String strDuracionIO = modeloTabla.getValueAt(i, 4).toString();
 
-                    listaInput.add(new Proceso(id, rafaga, prio, llegada, inicioIO, duracionIO));
+                    List<Integer> inicios = parsearEntrada(strInicioIO);
+                    List<Integer> duraciones = parsearEntrada(strDuracionIO);
+
+                    listaInput.add(new Proceso(id, rafaga, prio, llegada, inicios, duraciones));
                 }
 
-                // Pasamos ambos umbrales al motor
                 engine.ejecutarSimulacion(listaInput, umbralT, umbralP);
 
                 // Actualizar Tabla
@@ -120,8 +133,28 @@ public class VentanaPrincipal extends JFrame {
 
             } catch (Exception ex) {
                 ex.printStackTrace();
-                JOptionPane.showMessageDialog(this, "Error en los datos (revisa celdas vacías).");
+                JOptionPane.showMessageDialog(this, "Error en los datos (revisa formato 2-4 o números solos).");
             }
         });
+    }
+
+    // --- NUEVO MÉTODO AUXILIAR ---
+    private java.util.List<Integer> parsearEntrada(String texto) {
+        java.util.List<Integer> lista = new ArrayList<>();
+        if (texto == null || texto.trim().isEmpty() || texto.trim().equals("-")) {
+            return lista; 
+        }
+        // Si pone 0, lo ignoramos para no generar IOs fantasmas, o lo tratamos como vacío
+        if (texto.trim().equals("0")) return lista;
+
+        String[] partes = texto.split("-");
+        for (String p : partes) {
+            try {
+                lista.add(Integer.parseInt(p.trim()));
+            } catch (NumberFormatException e) {
+                // Si hay error, ignoramos
+            }
+        }
+        return lista;
     }
 }

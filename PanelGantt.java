@@ -23,7 +23,33 @@ public class PanelGantt extends JPanel {
         this.historiaListos = listos;
         
         if(cpu != null && !cpu.isEmpty()) {
-            int anchoNecesario = MARGEN_IZQ + (cpu.size() * ANCHO_CELDA) + 50;
+            // Calculamos una anchura suficiente considerando CPU y la cantidad real de elementos en CPL (comprimida)
+            int maxCells = cpu.size();
+            if (historiaListos != null) {
+                int cplCount = 0;
+                for (String s : historiaListos) {
+                    if (s == null) continue;
+                    String ss = s.trim();
+                    if (ss.isEmpty() || ss.equals("-")) continue;
+                    // cada token separado por espacios representa un proceso en la CPL en ese instante
+                    String[] tokens = ss.split("\\s+");
+                    cplCount += tokens.length;
+                }
+                maxCells = Math.max(maxCells, cplCount);
+            }
+            if (historiaIO != null) {
+                int ioCount = 0;
+                for (String s : historiaIO) {
+                    if (s == null) continue;
+                    String ss = s.trim();
+                    if (ss.isEmpty() || ss.equals("-")) continue;
+                    String[] tokens = ss.split("\\s+");
+                    ioCount += tokens.length;
+                }
+                maxCells = Math.max(maxCells, ioCount);
+            }
+
+            int anchoNecesario = MARGEN_IZQ + (maxCells * ANCHO_CELDA) + 50;
             setPreferredSize(new Dimension(Math.max(1000, anchoNecesario), 300));
             revalidate();
         }
@@ -39,7 +65,7 @@ public class PanelGantt extends JPanel {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
         dibujarFila(g2, "CPL:", 0, historiaListos);
-        dibujarFila(g2, "CE/S:", 1, historiaIO);
+        dibujarFila(g2, "COE/S:", 1, historiaIO);
         dibujarFila(g2, "CPU:", 2, historiaCPU);
         
         int tiempoTotal = historiaCPU.size();
@@ -58,35 +84,73 @@ public class PanelGantt extends JPanel {
         g.setColor(new Color(220, 220, 220));
         g.drawLine(0, yBase + ALTO_FILA, getWidth(), yBase + ALTO_FILA);
 
-        for (int t = 0; t < datos.size(); t++) {
-            String rawVal = datos.get(t);
-            int x = MARGEN_IZQ + (t * ANCHO_CELDA);
-            int y = yBase + 5;
-            
-            if (!rawVal.equals("-") && !rawVal.isEmpty()) {
-                String[] procesos = rawVal.split(" ");
-                if (procesos.length > 1) {
-                    dibujarCaja(g, x, y, "...", "", "", Color.LIGHT_GRAY); 
-                } else {
-                    // AQUÍ ESTÁ LA LÓGICA NUEVA
-                    String[] partes = rawVal.trim().split("\\|");
-                    
-                    // Caso estándar: ID|Prio|Rafaga (CPU y CPL)
-                    if (partes.length == 3) {
-                        dibujarCaja(g, x, y, partes[0], partes[1], "R:" + partes[2], getColor(partes[0]));
-                    } 
-                    // Caso E/S: ID|Prio|Rafaga|TiempoSalida
-                    else if (partes.length == 4) {
-                        String rafaga = partes[2];
-                        String salida = partes[3];
-                        // Formato combinado para abajo: R:9 T:4
-                        String infoAbajo = "R:" + rafaga + " T:" + salida;
-                        dibujarCaja(g, x, y, partes[0], partes[1], infoAbajo, getColor(partes[0]));
+        if (datos == null) return;
+
+        // Filas especiales (CPL y CE/S/COE/S): compactar (sin huecos) y priorizar el proceso recién llegado
+        if (titulo != null && (titulo.startsWith("CPL") || titulo.startsWith("CE/S") || titulo.startsWith("COE/S"))) {
+            int colIndex = 0; // columna comprimida (solo incrementa cuando dibujamos una caja)
+            for (int t = 0; t < datos.size(); t++) {
+                String rawVal = datos.get(t);
+                if (rawVal == null) continue;
+                String sv = rawVal.trim();
+                if (sv.isEmpty() || sv.equals("-")) continue; // saltamos huecos
+
+                // tokens separados por espacios representan procesos en la CPL en ese instante
+                String[] procesos = sv.split("\\s+");
+                // Queremos que el más reciente (último token) tenga prioridad visual y aparezca antes,
+                // así que dibujamos en orden inverso: del último al primero.
+                for (int p = procesos.length - 1; p >= 0; p--) {
+                    String token = procesos[p];
+                    int x = MARGEN_IZQ + (colIndex * ANCHO_CELDA);
+                    int y = yBase + 5;
+
+                    if (!token.equals("-") && !token.isEmpty()) {
+                        String[] partes = token.trim().split("\\|");
+                        if (partes.length == 3) {
+                            dibujarCaja(g, x, y, partes[0], partes[1], "R:" + partes[2], getColor(partes[0]));
+                        } else if (partes.length == 4) {
+                            String rafaga = partes[2];
+                            String salida = partes[3];
+                            String infoAbajo = "R:" + rafaga + " T:" + salida;
+                            dibujarCaja(g, x, y, partes[0], partes[1], infoAbajo, getColor(partes[0]));
+                        } else {
+                            // token con formato inesperado: dibujamos el token bruto
+                            dibujarCaja(g, x, y, token, "", "", Color.LIGHT_GRAY);
+                        }
+                    } else {
+                        g.setColor(new Color(250, 250, 250));
+                        g.drawRect(x, y, ANCHO_CELDA, ALTO_FILA - 10);
                     }
+
+                    colIndex++;
                 }
-            } else {
-                g.setColor(new Color(250, 250, 250));
-                g.drawRect(x, y, ANCHO_CELDA, ALTO_FILA - 10);
+            }
+        } else {
+            // Comportamiento original (alineado por tiempo)
+            for (int t = 0; t < datos.size(); t++) {
+                String rawVal = datos.get(t);
+                int x = MARGEN_IZQ + (t * ANCHO_CELDA);
+                int y = yBase + 5;
+                
+                if (rawVal != null && !rawVal.equals("-") && !rawVal.isEmpty()) {
+                    String[] procesos = rawVal.split(" ");
+                    if (procesos.length > 1) {
+                        dibujarCaja(g, x, y, "...", "", "", Color.LIGHT_GRAY); 
+                    } else {
+                        String[] partes = rawVal.trim().split("\\|");
+                        if (partes.length == 3) {
+                            dibujarCaja(g, x, y, partes[0], partes[1], "R:" + partes[2], getColor(partes[0]));
+                        } else if (partes.length == 4) {
+                            String rafaga = partes[2];
+                            String salida = partes[3];
+                            String infoAbajo = "R:" + rafaga + " T:" + salida;
+                            dibujarCaja(g, x, y, partes[0], partes[1], infoAbajo, getColor(partes[0]));
+                        }
+                    }
+                } else {
+                    g.setColor(new Color(250, 250, 250));
+                    g.drawRect(x, y, ANCHO_CELDA, ALTO_FILA - 10);
+                }
             }
         }
     }
