@@ -29,7 +29,7 @@ public class VentanaPrincipal extends JFrame {
         txtUmbralPrio = new JTextField("7", 3); // Valor por defecto del ejemplo
         panelNorte.add(txtUmbralPrio);
         
-        panelNorte.add(new JLabel(" entonces mejorar la prioridad cada:"));
+        panelNorte.add(new JLabel(" aumentar la prioridad cada:"));
         txtUmbralTiempo = new JTextField("5", 3); // Valor por defecto del ejemplo
         panelNorte.add(txtUmbralTiempo);
         panelNorte.add(new JLabel("ms"));

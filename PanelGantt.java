@@ -23,15 +23,14 @@ public class PanelGantt extends JPanel {
         this.historiaListos = listos;
         
         if(cpu != null && !cpu.isEmpty()) {
-            // Calculamos una anchura suficiente considerando CPU y la cantidad real de elementos en CPL (comprimida)
             int maxCells = cpu.size();
+            // Cálculos de ancho dinámico para scroll
             if (historiaListos != null) {
                 int cplCount = 0;
                 for (String s : historiaListos) {
                     if (s == null) continue;
                     String ss = s.trim();
                     if (ss.isEmpty() || ss.equals("-")) continue;
-                    // cada token separado por espacios representa un proceso en la CPL en ese instante
                     String[] tokens = ss.split("\\s+");
                     cplCount += tokens.length;
                 }
@@ -86,20 +85,23 @@ public class PanelGantt extends JPanel {
 
         if (datos == null) return;
 
-        // Filas especiales (CPL y CE/S/COE/S): compactar (sin huecos) y priorizar el proceso recién llegado
+        // Filas especiales (CPL y CE/S/COE/S): compactar (sin huecos)
         if (titulo != null && (titulo.startsWith("CPL") || titulo.startsWith("CE/S") || titulo.startsWith("COE/S"))) {
-            int colIndex = 0; // columna comprimida (solo incrementa cuando dibujamos una caja)
+            int colIndex = 0; // columna comprimida
             for (int t = 0; t < datos.size(); t++) {
                 String rawVal = datos.get(t);
                 if (rawVal == null) continue;
                 String sv = rawVal.trim();
-                if (sv.isEmpty() || sv.equals("-")) continue; // saltamos huecos
+                if (sv.isEmpty() || sv.equals("-")) continue;
 
-                // tokens separados por espacios representan procesos en la CPL en ese instante
+                // tokens separados por espacios
                 String[] procesos = sv.split("\\s+");
-                // Queremos que el más reciente (último token) tenga prioridad visual y aparezca antes,
-                // así que dibujamos en orden inverso: del último al primero.
-                for (int p = procesos.length - 1; p >= 0; p--) {
+                
+                // --- CORRECCIÓN AQUÍ ---
+                // Iteramos en orden NORMAL (0 a N) para que el primero de la lista (Head) 
+                // se dibuje primero a la izquierda.
+                // Como el Engine ya pone al nuevo (P2) primero en la lista, aquí se dibujará primero.
+                for (int p = 0; p < procesos.length; p++) {
                     String token = procesos[p];
                     int x = MARGEN_IZQ + (colIndex * ANCHO_CELDA);
                     int y = yBase + 5;
@@ -114,7 +116,6 @@ public class PanelGantt extends JPanel {
                             String infoAbajo = "R:" + rafaga + " T:" + salida;
                             dibujarCaja(g, x, y, partes[0], partes[1], infoAbajo, getColor(partes[0]));
                         } else {
-                            // token con formato inesperado: dibujamos el token bruto
                             dibujarCaja(g, x, y, token, "", "", Color.LIGHT_GRAY);
                         }
                     } else {
@@ -126,7 +127,7 @@ public class PanelGantt extends JPanel {
                 }
             }
         } else {
-            // Comportamiento original (alineado por tiempo)
+            // Comportamiento original (alineado por tiempo) para la fila CPU
             for (int t = 0; t < datos.size(); t++) {
                 String rawVal = datos.get(t);
                 int x = MARGEN_IZQ + (t * ANCHO_CELDA);
@@ -160,20 +161,16 @@ public class PanelGantt extends JPanel {
         g.setColor(c); g.fillRect(x, y, ANCHO_CELDA, alto);
         g.setColor(Color.BLACK); g.drawRect(x, y, ANCHO_CELDA, alto);
         
-        // 1. PRIORIDAD (Arriba)
         g.setColor(Color.DARK_GRAY);
         g.setFont(new Font("SansSerif", Font.PLAIN, 10));
         centrarTexto(g, prio, x, y + 15, ANCHO_CELDA);
         
-        // 2. NOMBRE (Centro)
         g.setColor(Color.BLACK);
         g.setFont(new Font("Arial", Font.BOLD, 14));
         centrarTexto(g, nombre, x, y + 35, ANCHO_CELDA);
         
-        // 3. INFO ABAJO (Ráfaga y/o Tiempo Salida)
         if(!infoAbajo.isEmpty()){
             g.setColor(Color.DARK_GRAY);
-            // Usamos fuente un poco más pequeña para que quepa "R:XX T:YY"
             g.setFont(new Font("SansSerif", Font.PLAIN, 9)); 
             centrarTexto(g, infoAbajo, x, y + 54, ANCHO_CELDA);
         }

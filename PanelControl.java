@@ -5,7 +5,6 @@ import java.util.List;
 public class PanelControl extends JPanel {
     private JLabel lblTEP;   // Tiempo de Espera Promedio
     private JLabel lblTEjeP; // Tiempo de Ejecución/Retorno Promedio
-    private JLabel lblResp;  // Tiempo de Respuesta (Opcional, pero útil)
 
     public PanelControl() {
         // Diseño: Centrado con separación

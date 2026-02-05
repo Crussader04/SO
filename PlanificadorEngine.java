@@ -8,12 +8,14 @@ public class PlanificadorEngine {
     public List<String> ganttIO = new ArrayList<>();
     public List<String> ganttListos = new ArrayList<>();
 
+    // --- NUEVO: Contador global para gestionar el orden de llegada a CPL ---
+    private int contadorOrden = 0;
+
     public void ejecutarSimulacion(List<Proceso> inputProcesos, int umbralTiempo, int umbralPrioridad) {
         limpiarSimulacion();
         
         List<Proceso> pendientes = new ArrayList<>();
         for(Proceso p : inputProcesos) {
-            // Clonamos pasando las listas (IMPORTANTE: crear nuevas listas para no modificar original)
             pendientes.add(new Proceso(p.id, p.burstTotal, p.prioridad, p.llegada, 
                                        new ArrayList<>(p.listaIniciosIO), 
                                        new ArrayList<>(p.listaDuracionesIO)));
@@ -25,15 +27,18 @@ public class PlanificadorEngine {
 
         while (terminados.size() < inputProcesos.size() && reloj < 10000) {
             
-            // Listas auxiliares para eventos de ESTE segundo (para graficar)
             List<Proceso> ingresosCPL = new ArrayList<>();
             List<Proceso> ingresosIO = new ArrayList<>(); 
 
-            // 1. LLEGADAS
+            // 1. LLEGADAS (Nuevos Procesos)
+            // Se procesan PRIMERO para que obtengan un número de orden menor
             Iterator<Proceso> it = pendientes.iterator();
             while (it.hasNext()) {
                 Proceso p = it.next();
                 if (p.llegada == reloj) {
+                    // Asignamos turno actual
+                    p.ordenLlegadaCPL = contadorOrden++;
+                    
                     colaListos.add(p);
                     p.envejeciendo = false;
                     ingresosCPL.add(p);
@@ -41,12 +46,12 @@ public class PlanificadorEngine {
                 }
             }
 
-            // 2. RETORNO DE E/S
+            // 2. RETORNO DE E/S (Procesos Desbloqueados)
+            // Se procesan DESPUÉS, obteniendo un número de orden mayor que los nuevos
             if (!bloqueados.isEmpty()) {
                 List<Proceso> vuelven = new ArrayList<>();
                 for (Proceso p : bloqueados) {
                     p.tiempoEnIO++;
-                    // Usamos duracionIOActual, que se cargó al irse a bloqueo
                     if (p.tiempoEnIO >= p.duracionIOActual) {
                         vuelven.add(p);
                     }
@@ -57,34 +62,27 @@ public class PlanificadorEngine {
                     p.tiempoEnIO = 0;
                     p.tiempoEsperandoEnCola = 0;
                     p.envejeciendo = false;
-                    
-                    // IMPORTANTE: Preparamos el siguiente índice para la próxima E/S
                     p.indiceIO++; 
                     
+                    // Asignamos turno (será mayor que el de los nuevos que entraron arriba)
+                    p.ordenLlegadaCPL = contadorOrden++;
+                    
                     colaListos.add(p);
-                    ingresosCPL.add(p); // Vuelve a CPL
+                    ingresosCPL.add(p); 
                 }
             }
 
             // 3. CHECK E/S EN CPU
-            // Verificamos si al proceso actual le toca alguna E/S de su lista
             if (cpu != null && !cpu.enIO) {
-                // ¿Le quedan E/S pendientes?
                 if (cpu.indiceIO < cpu.listaIniciosIO.size()) {
                     int momentoIO = cpu.listaIniciosIO.get(cpu.indiceIO);
-                    
-                    // Si el tiempo ejecutado coincide con el hito de E/S
                     if (cpu.tiempoEjecutado == momentoIO) {
                         cpu.enIO = true;
-                        
-                        // Cargamos la duración correspondiente a ESTE índice
                         if (cpu.indiceIO < cpu.listaDuracionesIO.size()) {
                             cpu.duracionIOActual = cpu.listaDuracionesIO.get(cpu.indiceIO);
                         } else {
-                            // Seguridad por si faltan datos
                             cpu.duracionIOActual = 1; 
                         }
-
                         bloqueados.add(cpu);
                         ingresosIO.add(cpu);
                         cpu = null;
@@ -93,8 +91,9 @@ public class PlanificadorEngine {
             }
 
             // 4. PLANIFICADOR
+            // MODIFICADO: Usamos 'ordenLlegadaCPL' para el desempate en lugar de 'llegada' original
             colaListos.sort(Comparator.comparingInt((Proceso p) -> p.prioridad)
-                                         .thenComparingInt(p -> p.llegada));
+                                         .thenComparingInt(p -> p.ordenLlegadaCPL));
 
             if (!colaListos.isEmpty()) {
                 if (cpu == null) {
@@ -137,14 +136,7 @@ public class PlanificadorEngine {
                     cpu.tiempoRetorno = cpu.tiempoFin - cpu.llegada;
                     cpu.tiempoEspera = cpu.tiempoRetorno - cpu.burstTotal; 
                     
-                    // Restamos TODAS las E/S que haya hecho para tener la espera real en cola
                     int totalIO = 0;
-                    // Sumamos solo las que completó (o sea, las anteriores a indiceIO)
-                    // Como el índice avanza al volver, sumamos hasta indiceIO-1.
-                    // O más fácil: TiempoEspera = Retorno - RáfagaTotal - (Suma de Duraciones EJECUTADAS)
-                    // Pero tu fórmula simple (Retorno - BurstTotal) incluye el tiempo de IO como "no-espera" 
-                    // si consideramos que espera es solo en cola de listos.
-                    // Para ajustarlo exacto, restamos el tiempo total que pasó en IO:
                     for(int k=0; k < cpu.indiceIO && k < cpu.listaDuracionesIO.size(); k++){
                          totalIO += cpu.listaDuracionesIO.get(k);
                     }
@@ -168,7 +160,6 @@ public class PlanificadorEngine {
         else {
             StringBuilder sb = new StringBuilder();
             for(Proceso p : ingresosIO) {
-                // Usamos duracionIOActual para calcular salida visual
                 int tiempoSalida = reloj + p.duracionIOActual;
                 sb.append("P").append(p.id).append("|")
                   .append(p.prioridad).append("|")
@@ -179,6 +170,9 @@ public class PlanificadorEngine {
         }
 
         // 3. CPL
+        // Aquí ordenamos visualmente también por orden de llegada para que coincida con la lógica
+        ingresosCPL.sort(Comparator.comparingInt(p -> p.ordenLlegadaCPL));
+        
         if (ingresosCPL.isEmpty()) ganttListos.add("-");
         else {
             StringBuilder sb = new StringBuilder();
@@ -192,5 +186,6 @@ public class PlanificadorEngine {
     private void limpiarSimulacion() {
         terminados.clear(); bloqueados.clear();
         ganttCPU.clear(); ganttIO.clear(); ganttListos.clear();
+        contadorOrden = 0; // Reiniciamos el contador de orden
     }
 }
